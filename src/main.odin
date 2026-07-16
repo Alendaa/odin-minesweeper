@@ -112,6 +112,8 @@ generate_field :: proc() {
 
         randomIndex := rand.int_range(0, len(grid)-i)
         randomCell := grid[randomIndex]
+        if randomCell == .Empty do continue
+
         grid[randomIndex] = grid[len(grid)-i]
         grid[len(grid)-i] = randomCell
     }
