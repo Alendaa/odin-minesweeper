@@ -79,5 +79,7 @@ main :: proc() {
 }
 
 generate_field :: proc() {
-
+    for cell in grid {
+        if cell == .Empty do continue
+    }
 }
