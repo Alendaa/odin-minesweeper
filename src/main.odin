@@ -1,17 +1,17 @@
 package CampoMinado
 
+import "base:intrinsics"
 import "core:fmt"
 import "core:math/rand"
 import rl "vendor:raylib"
 
-// TODO: change this to a bit_set so i can have two states per cell, like:
-// Cell: Mine, Flag
-Cell :: bit_set[enum u8 {
+Cell :: enum u8 {
     None,
-    Empty,
+    Revealed,
     Mine,
+    FlagedMine,
     Flag,
-}]
+}
 
 CELLS_PER_ROW_AND_COLUM :: 20
 grid: [CELLS_PER_ROW_AND_COLUM * CELLS_PER_ROW_AND_COLUM]Cell
@@ -21,6 +21,9 @@ MINES : u16 : 70
 CELL_COLOR1     :: rl.Color{75, 255, 0, 255}
 CELL_COLOR2     :: rl.Color{50, 200, 0, 255}
 CELL_HOVERED    :: rl.Color{50, 180, 0, 255}
+
+REVEALED_COLOR_BRIGHT :: rl.Color{179, 145, 87, 255}
+REVEALED_COLOR_DARK :: rl.Color{145, 118, 71, 255}
 
 SCREEN_SIZE :: [2]i32{600, 600}
 TITLE : cstring : "Campo minado"
@@ -35,40 +38,40 @@ GameState :: enum u8 {
 game := GameState.UNITIALIZED
 
 main :: proc() {
-    for &v in grid {
-        v = {.None}
-    }
-
+    fmt.println(len(grid))
     rl.InitWindow(SCREEN_SIZE.x, SCREEN_SIZE.y, TITLE)
     defer rl.CloseWindow()
     rl.SetTargetFPS(30)
 
     for !rl.WindowShouldClose() {
-
         mousePos := rl.GetMousePosition()
-
         switch {
         case rl.IsMouseButtonPressed(.LEFT):
             cellIndex := get_cell_index(mousePos)
-            switch grid[cellIndex] {
-            case {.None}:
+            #partial switch grid[cellIndex] {
+            case .None:
                 #partial switch game {
                 case .UNITIALIZED:
-                    grid[cellIndex] = {.Empty}
-                    generate_field()
+                    grid[cellIndex] = .Revealed
+                    generate_mines()
+                case .STARTED:
+                    reveal(get_cell_row_and_colum(mousePos))
                 }
-            case {.Mine}:
+            case .Mine:
                 game = .LOSE
             }
         case rl.IsMouseButtonPressed(.RIGHT) && game == .STARTED:
             cellIndex := get_cell_index(mousePos)
-            switch {
-            case .Flag in grid[cellIndex]:
-                grid[cellIndex] -= {.Flag}
-            case grid[cellIndex] == {.Mine} || grid[cellIndex] == {.None}:
-                grid[cellIndex] += {.Flag}
+            #partial switch grid[cellIndex] {
+            case .None:
+                grid[cellIndex] = .Flag
+            case .Mine:
+                grid[cellIndex] = .FlagedMine
+            case .FlagedMine:
+                grid[cellIndex] = .Mine
+            case .Flag:
+                grid[cellIndex] = .None
             }
-            fmt.println(grid[cellIndex])
         }
 
         rl.BeginDrawing()
@@ -85,17 +88,24 @@ main :: proc() {
                     f32(CELL_SIZE.x), f32(CELL_SIZE.y),
                 }
 
-                switch {
-                case .Flag in cell:
-                    rl.DrawRectangleRec(cellRec, rl.RED)
-                case cell == {.Mine}:
+                #partial switch grid[get_cell_index(x, y)] {
+                case .Mine:
                     rl.DrawRectangleRec(cellRec, rl.BLACK)
-                case:
+                case .Flag, .FlagedMine:
+                    rl.DrawRectangleRec(cellRec, rl.RED)
+                case .None:
                     if rl.CheckCollisionPointRec(mousePos, cellRec) {
                         rl.DrawRectangleRec(cellRec, CELL_HOVERED)
                     } else if n % 2 == 0 {
                         rl.DrawRectangleRec(cellRec, CELL_COLOR2)
                     }
+                case .Revealed:
+                    if n % 2 == 0 {
+                        rl.DrawRectangleRec(cellRec, REVEALED_COLOR_DARK)
+                        continue
+                    }
+
+                    rl.DrawRectangleRec(cellRec, REVEALED_COLOR_BRIGHT)
                 }
             }
         }
@@ -106,37 +116,67 @@ main :: proc() {
 
 get_cell_index :: proc{
     get_cell_index_by_pos,
-    get_cell_index_by_xy,
+    get_cell_index_by_row_and_colum,
 }
 
-get_cell_index_by_pos :: proc(position: rl.Vector2) -> i32 {
-    dividedPos := [2]i32{
-        i32(position.x) / CELL_SIZE.y,
-        i32(position.y) / CELL_SIZE.y,
+get_cell_index_by_pos :: #force_inline proc(position: [2]$T) -> int
+    where intrinsics.type_is_numeric(T) {
+    return get_cell_index_by_row_and_colum(get_cell_row_and_colum(position))
+}
+
+get_cell_index_by_row_and_colum :: #force_inline proc(row, colum: int) -> int {
+    return min(row + ((colum - 1) * CELLS_PER_ROW_AND_COLUM if colum != 0 else 0), len(grid)-1)
+}
+
+get_cell_row_and_colum :: #force_inline proc(position: rl.Vector2) -> (x, y: int) {
+    return  min(int(i32(position.x) / CELL_SIZE.x), CELLS_PER_ROW_AND_COLUM - 1),
+            min(int(i32(position.y) / CELL_SIZE.y), CELLS_PER_ROW_AND_COLUM - 1)
+}
+
+reveal :: proc(row, colum: int) {
+    if  row < 0 || row > CELLS_PER_ROW_AND_COLUM - 1 ||
+        colum < 0 || colum > CELLS_PER_ROW_AND_COLUM - 1 {
+        return
     }
 
-    return min(dividedPos.x + CELLS_PER_ROW_AND_COLUM * dividedPos.y, len(grid)-1)
-}
+    cell := &grid[get_cell_index(row, colum)]
+    if cell^ != .None do return
+    cell^ = .Revealed
 
-get_cell_index_by_xy :: proc(x, y: int) -> int {
-    return x + y * CELLS_PER_ROW_AND_COLUM
+    for offsetX := -1; offsetX <= 1; offsetX+=1 {
+        for offsetY := -1; offsetY <= 1; offsetY+=1 {
+            if  row + offsetX < 0 || row + offsetX > CELLS_PER_ROW_AND_COLUM - 1 ||
+                colum + offsetY < 0 || colum + offsetY > CELLS_PER_ROW_AND_COLUM - 1 {
+                continue
+            }
+
+            if grid[get_cell_index(row + offsetX, colum + offsetY)] == .Mine do return
+        }
+    }
+
+    for offsetX := -1; offsetX <= 1; offsetX += 1 {
+        for offsetY := -1; offsetY <= 1; offsetY += 1 {
+            if offsetX == 0 && offsetY == 0 do continue
+            reveal(row + offsetX, colum + offsetY)
+        }
+    }
 }
 
 // This proc uses the Fisher-Yates Shuffle to generate the mines.
-generate_field :: proc() {
+generate_mines :: proc() #no_bounds_check {
     // i think padding is not a good name, but idc
     padding: u16
     for i in 0..<MINES {
-        if grid[i] == {.Empty} do padding += 1
-        grid[i+padding] = {.Mine}
+        if grid[i] == .Revealed do padding += 1
+        grid[i+padding] = .Mine
     }
 
     for i in 1..=len(grid)-1 {
-        if grid[len(grid)-i] == {.Empty} do continue
+        if grid[len(grid)-i] == .Revealed do continue
 
         randomIndex := rand.int_range(0, len(grid)-i)
         randomCell := grid[randomIndex]
-        if randomCell == {.Empty} do continue
+        if randomCell == .Revealed do continue
 
         grid[randomIndex] = grid[len(grid)-i]
         grid[len(grid)-i] = randomCell
